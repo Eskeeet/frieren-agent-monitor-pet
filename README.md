@@ -1,11 +1,17 @@
-# Frieren (or Waifu of Your Choice) Agent Monitor
+# Frieren Agent Monitor — macOS Desktop Pet
 
-A local, open-source macOS desktop companion for Claude Code, Codex, Cursor, and Pi.
-Frieren floats above the desktop without a dashboard frame and keeps an eye on
-agent sessions running locally or on remote machines reached through SSH.
+An open-source **AI coding agent monitor and desktop pet for macOS**, with
+support for **Claude Code, OpenAI Codex, Cursor, and Pi**. Keep track of running
+agents, requests for input, and completed tasks through an animated Frieren
+companion on your desktop.
+
+Frieren floats above your windows without a dashboard frame. Use her as a local
+agent session monitor or track coding agents on remote machines over SSH.
+
+Choose Frieren or a waifu of your choice with support for custom pet characters.
 
 <p align="center">
-  <img src="Resources/frieren-agent-sessions.png" alt="Frieren Agent Monitor showing no active agent sessions" width="720">
+  <img src="Resources/frieren-agent-sessions.png" alt="Frieren desktop pet and AI coding agent monitor for macOS showing no active sessions" width="720">
 </p>
 
 <p align="center">
@@ -13,6 +19,23 @@ agent sessions running locally or on remote machines reached through SSH.
   <br>
   <sub>Image source: <a href="https://codexpetdb.com/en/pets/frieren-4">Codex Pet Database — Frieren</a></sub>
 </p>
+
+## Features
+
+- **Monitor multiple coding agents:** see Claude Code, Codex, Cursor, and Pi
+  sessions in one place, with running, waiting, recently finished, and idle states.
+- **Animated desktop pet:** Frieren sleeps, walks, and celebrates as your agents
+  work. Click to interact or drag her to a different spot on your desktop.
+- **Agent status alerts:** an orange alert shows when an agent needs input;
+  a jump and green halo signal completion. Notification bubbles surface both.
+- **Remote agent monitoring over SSH:** watch sessions on Linux or macOS hosts
+  using your existing SSH configuration.
+- **Session shortcuts:** click a local session to focus its app or open its
+  project, or click a remote session to open an SSH connection.
+- **Custom pet characters:** import your own artwork and switch characters
+  from the right-click menu.
+- **Local data:** session data stays on your Mac and explicitly configured SSH
+  hosts, with no external monitoring service.
 
 ## Latest updates
 
@@ -33,7 +56,7 @@ agent sessions running locally or on remote machines reached through SSH.
 | Cursor | Yes | Yes | CLI/Desktop process data and lifecycle hooks |
 | Pi | Yes | Yes | Process data and the Frieren Monitor Pi extension |
 
-## Behavior
+## Desktop pet behavior
 
 - Sleeping: no active sessions
 - Walking: one or more sessions are running
@@ -104,7 +127,7 @@ Claude hooks also clear an input alert when a prompt is submitted or the matchin
 permission-gated tool resolves; background subagent tool activity does not clear
 an unrelated alert.
 
-## Remote machines over SSH
+## Remote agent monitoring over SSH
 
 Remote monitoring uses the system OpenSSH client, including aliases, proxy
 jumps, keys, and other options from `~/.ssh/config`.
@@ -155,7 +178,7 @@ its last-known active sessions are retained instead of being reported as
 finished. Remote Claude processes reported as idle are shown separately at the
 bottom instead of being treated as needs-input sessions.
 
-## Adding characters
+## Adding custom desktop pet characters
 
 Local characters live outside the repository in
 `~/Library/Application Support/Frieren Monitor/Characters`. Each character has
