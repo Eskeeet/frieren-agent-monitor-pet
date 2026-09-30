@@ -2,11 +2,12 @@ import AppKit
 import SwiftUI
 
 final class PetPanel: NSPanel {
-    private static let petSize = NSSize(width: 140, height: 170)
+    private static let petSize = PetWindowGeometry.petSize
     var onPetDragged: ((CGFloat, CGFloat) -> Void)?
     var onPetDragEnded: (() -> Void)?
     private var trackingPetDrag = false
     private var lastMouseLocation: NSPoint?
+    private var dragOffsetFromPetAnchor: NSPoint?
 
     init(frame: NSRect) {
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -15,7 +16,9 @@ final class PetPanel: NSPanel {
         backgroundColor = .clear
         level = .statusBar
         hasShadow = false
-        isMovableByWindowBackground = true
+        // Move the pet explicitly so SwiftUI's click/context-menu gestures
+        // cannot prevent dragging (or cause a second background-window move).
+        isMovableByWindowBackground = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
@@ -31,10 +34,21 @@ final class PetPanel: NSPanel {
             trackingPetDrag = point.x >= frame.width - Self.petSize.width
                 && point.y <= Self.petSize.height
             lastMouseLocation = trackingPetDrag ? NSEvent.mouseLocation : nil
+            dragOffsetFromPetAnchor = lastMouseLocation.map {
+                NSPoint(x: $0.x - frame.maxX, y: $0.y - frame.minY)
+            }
         case .leftMouseDragged where trackingPetDrag:
             let location = NSEvent.mouseLocation
-            if let previous = lastMouseLocation {
-                onPetDragged?(location.x - previous.x, location.y - previous.y)
+            if let previous = lastMouseLocation, let offset = dragOffsetFromPetAnchor {
+                let deltaX = location.x - previous.x
+                let deltaY = location.y - previous.y
+                var proposedFrame = frame
+                // Anchor to the cursor, not the last clamped frame. This keeps
+                // the grab point stable across screen edges and panel resizing.
+                proposedFrame.origin.x = location.x - offset.x - frame.width
+                proposedFrame.origin.y = location.y - offset.y
+                setFrameOrigin(frameConstrainedToVisibleScreen(proposedFrame).origin)
+                onPetDragged?(deltaX, deltaY)
             }
             lastMouseLocation = location
             shouldConstrainPet = true
@@ -45,6 +59,7 @@ final class PetPanel: NSPanel {
             }
             trackingPetDrag = false
             lastMouseLocation = nil
+            dragOffsetFromPetAnchor = nil
         default:
             break
         }
@@ -57,14 +72,7 @@ final class PetPanel: NSPanel {
             return proposedFrame
         }
 
-        var result = proposedFrame
-        let petWidth = min(Self.petSize.width, result.width, visibleFrame.width)
-        let petHeight = min(Self.petSize.height, result.height, visibleFrame.height)
-        let minimumX = visibleFrame.minX - result.width + petWidth
-        let maximumX = visibleFrame.maxX - result.width
-        result.origin.x = min(max(result.origin.x, minimumX), maximumX)
-        result.origin.y = min(max(result.origin.y, visibleFrame.minY), visibleFrame.maxY - petHeight)
-        return result
+        return PetWindowGeometry.constrainedFrame(proposedFrame, to: visibleFrame)
     }
 
     private func constrainPetToVisibleScreen() {
@@ -75,17 +83,15 @@ final class PetPanel: NSPanel {
     }
 
     private func targetScreen(for proposedFrame: NSRect) -> NSScreen? {
-        let intersectingScreen = NSScreen.screens
-            .map { ($0, $0.visibleFrame.intersection(proposedFrame)) }
-            .filter { !$0.1.isNull }
-            .max { $0.1.width * $0.1.height < $1.1.width * $1.1.height }?
-            .0
-        if let intersectingScreen { return intersectingScreen }
-
-        let mouseLocation = NSEvent.mouseLocation
-        return NSScreen.screens.first { $0.visibleFrame.contains(mouseLocation) }
-            ?? screen
-            ?? NSScreen.main
+        let screens = NSScreen.screens
+        if let index = PetWindowGeometry.targetScreenIndex(
+            for: proposedFrame,
+            screens: screens.map(\.frame),
+            draggingAt: trackingPetDrag ? NSEvent.mouseLocation : nil
+        ) {
+            return screens[index]
+        }
+        return screen ?? NSScreen.main
     }
 }
 
