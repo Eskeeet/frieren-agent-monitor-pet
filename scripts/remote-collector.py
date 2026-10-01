@@ -233,6 +233,14 @@ def recent_hooks():
 
 
 def merge_hooks(sessions):
+    # Freeze the status-file timestamps before replaying hooks. Claude's idle
+    # or shell status is newer evidence than an old prompt whose Stop hook was
+    # never recorded; process-scan timestamps for other agents are not evidence.
+    inactive_claude_at = {
+        session["id"]: session["updatedAt"]
+        for session in sessions
+        if session["harness"] == "claude" and session["state"] == "idle"
+    }
     pending_permissions = {}
     for hook in recent_hooks():
         agent = hook.get("agent", "")
@@ -259,13 +267,16 @@ def merge_hooks(sessions):
             continue
         event = hook.get("event")
         if event == "start":
-            match["state"] = "running"
-            match["updatedAt"] = stamp
-            pending_permissions.pop(match["id"], None)
             if hook.get("title"):
                 match["title"] = hook["title"]
             if hook.get("projectPath") not in {None, "/"}:
                 match["projectPath"] = hook["projectPath"]
+        if stamp < inactive_claude_at.get(match["id"], float("-inf")):
+            continue
+        if event == "start":
+            match["state"] = "running"
+            match["updatedAt"] = stamp
+            pending_permissions.pop(match["id"], None)
         elif event == "permission" and hook.get("requestKey") is not None:
             match["state"] = "waiting"
             pending_permissions.setdefault(match["id"], set()).add(hook["requestKey"])
@@ -286,4 +297,5 @@ def merge_hooks(sessions):
     return sessions
 
 
-print(json.dumps({"version": 1, "generatedAt": NOW, "sessions": merge_hooks(process_sessions() + codex_sessions())}, separators=(",", ":")))
+if __name__ == "__main__":
+    print(json.dumps({"version": 1, "generatedAt": NOW, "sessions": merge_hooks(process_sessions() + codex_sessions())}, separators=(",", ":")))

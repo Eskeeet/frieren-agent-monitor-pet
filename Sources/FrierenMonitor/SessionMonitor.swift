@@ -237,6 +237,11 @@ final class SessionMonitor: ObservableObject {
             if !next.contains(where: { $0.id == old.id }) { next.append(old) }
         }
 
+        // Only Claude's inactive status is authoritative here. A process scan's
+        // current timestamp alone must not invalidate another harness's hooks.
+        let inactiveClaudeAt = Dictionary(uniqueKeysWithValues: discovered
+            .filter { !$0.isRemote && $0.harness == .claude && $0.state == .idle }
+            .map { ($0.id, $0.updatedAt) })
         var pendingPermissionsBySession: [String: Set<String>] = [:]
         for hook in hooks {
             guard let index = bestMatch(for: hook, in: next) else { continue }
@@ -248,9 +253,6 @@ final class SessionMonitor: ObservableObject {
                 guard hookDate >= next[index].startedAt.addingTimeInterval(-2) else { continue }
             }
             if hook.event == "start" {
-                next[index].state = .running
-                next[index].updatedAt = hookDate
-                pendingPermissionsBySession.removeValue(forKey: next[index].id)
                 if let title = hook.title, !title.isEmpty { next[index].title = title }
                 if let projectPath = hook.projectPath,
                    projectPath != "/",
@@ -258,6 +260,16 @@ final class SessionMonitor: ObservableObject {
                         && URL(fileURLWithPath: projectPath).lastPathComponent == ".cursor") {
                     next[index].projectPath = projectPath
                 }
+            }
+            // Keep prompt metadata, but do not replay stale state over a newer
+            // idle/shell status when Claude did not emit a Stop hook.
+            if let inactiveAt = inactiveClaudeAt[next[index].id], hookDate < inactiveAt {
+                continue
+            }
+            if hook.event == "start" {
+                next[index].state = .running
+                next[index].updatedAt = hookDate
+                pendingPermissionsBySession.removeValue(forKey: next[index].id)
             }
             if hook.event == "permission", let requestKey = hook.requestKey {
                 next[index].state = .waiting
