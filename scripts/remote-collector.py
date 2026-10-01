@@ -110,6 +110,14 @@ def process_sessions():
         # its long-lived process. Both `idle` and `shell` mean that no agent
         # turn is currently running.
         inactive = isinstance(sidecar, dict) and sidecar.get("status") in {"idle", "shell"}
+        status_updated = None
+        if isinstance(sidecar, dict):
+            if inactive:
+                status_updated = sidecar.get("statusUpdatedAt") or sidecar.get("updatedAt")
+            elif sidecar.get("status") in {"busy", "running"}:
+                # updatedAt also changes on rename; it cannot clear a permission.
+                status_updated = sidecar.get("statusUpdatedAt")
+        status_updated = status_updated / 1000 if status_updated is not None else None
         sessions.append({
             "id": f"{harness}:{pid}",
             "pid": pid,
@@ -117,8 +125,9 @@ def process_sessions():
             "projectPath": cwd_for(pid),
             "title": sidecar.get("name") if isinstance(sidecar, dict) else None,
             "startedAt": NOW - elapsed_seconds(parts[1]),
-            "updatedAt": updated,
+            "updatedAt": status_updated if status_updated is not None else updated,
             "state": "idle" if inactive else "running",
+            "claudeStatusUpdatedAt": status_updated,
         })
     return sessions
 
@@ -236,10 +245,12 @@ def merge_hooks(sessions):
     # Freeze the status-file timestamps before replaying hooks. Claude's idle
     # or shell status is newer evidence than an old prompt whose Stop hook was
     # never recorded; process-scan timestamps for other agents are not evidence.
-    inactive_claude_at = {
-        session["id"]: session["updatedAt"]
+    claude_status_at = {
+        session["id"]: session.get("claudeStatusUpdatedAt") if session.get("claudeStatusUpdatedAt") is not None
+            else session["updatedAt"]
         for session in sessions
-        if session["harness"] == "claude" and session["state"] == "idle"
+        if session["harness"] == "claude"
+        and (session.get("claudeStatusUpdatedAt") is not None or session["state"] == "idle")
     }
     pending_permissions = {}
     for hook in recent_hooks():
@@ -271,7 +282,7 @@ def merge_hooks(sessions):
                 match["title"] = hook["title"]
             if hook.get("projectPath") not in {None, "/"}:
                 match["projectPath"] = hook["projectPath"]
-        if stamp < inactive_claude_at.get(match["id"], float("-inf")):
+        if stamp < claude_status_at.get(match["id"], float("-inf")):
             continue
         if event == "start":
             match["state"] = "running"

@@ -1,13 +1,26 @@
 import AppKit
 import Foundation
 
-private struct ClaudeSidecar: Decodable {
+struct ClaudeSidecar: Decodable {
     let name: String?
     let status: String?
     let updatedAt: Double?
+    let statusUpdatedAt: Double?
+
+    var state: MonitorState {
+        ["idle", "shell"].contains(status) ? .idle : .running
+    }
+
+    var authoritativeStatusDate: Date? {
+        // A rename also changes updatedAt. Only a real busy transition proves
+        // that an earlier permission prompt has been resolved.
+        let timestamp = state == .idle ? (statusUpdatedAt ?? updatedAt)
+            : (["busy", "running"].contains(status) ? statusUpdatedAt : nil)
+        return timestamp.map { Date(timeIntervalSince1970: $0 / 1000) }
+    }
 }
 
-private struct HookRecord: Decodable {
+struct HookRecord: Decodable {
     let timestamp: Double
     let agent: String
     let event: String
@@ -189,7 +202,7 @@ final class SessionMonitor: ObservableObject {
         return true
     }
 
-    private func merge(
+    func merge(
         previous: [AgentSession],
         discovered: [AgentSession],
         hooks: [HookRecord],
@@ -237,11 +250,16 @@ final class SessionMonitor: ObservableObject {
             if !next.contains(where: { $0.id == old.id }) { next.append(old) }
         }
 
-        // Only Claude's inactive status is authoritative here. A process scan's
-        // current timestamp alone must not invalidate another harness's hooks.
-        let inactiveClaudeAt = Dictionary(uniqueKeysWithValues: discovered
-            .filter { !$0.isRemote && $0.harness == .claude && $0.state == .idle }
-            .map { ($0.id, $0.updatedAt) })
+        // Claude publishes actual status transitions separately from metadata.
+        // A newer busy transition clears obsolete permissions even if the tool
+        // input changed during approval and its resume hook has a different key.
+        let claudeStatusAt = Dictionary(uniqueKeysWithValues: discovered
+            .filter { !$0.isRemote && $0.harness == .claude }
+            .compactMap { session -> (String, Date)? in
+                let date = session.claudeStatusUpdatedAt
+                    ?? (session.state == .idle ? session.updatedAt : nil)
+                return date.map { (session.id, $0) }
+            })
         var pendingPermissionsBySession: [String: Set<String>] = [:]
         for hook in hooks {
             guard let index = bestMatch(for: hook, in: next) else { continue }
@@ -261,9 +279,9 @@ final class SessionMonitor: ObservableObject {
                     next[index].projectPath = projectPath
                 }
             }
-            // Keep prompt metadata, but do not replay stale state over a newer
-            // idle/shell status when Claude did not emit a Stop hook.
-            if let inactiveAt = inactiveClaudeAt[next[index].id], hookDate < inactiveAt {
+            // Keep prompt metadata, but do not replay state over a newer
+            // authoritative Claude status transition.
+            if let statusAt = claudeStatusAt[next[index].id], hookDate < statusAt {
                 continue
             }
             if hook.event == "start" {
@@ -345,11 +363,13 @@ final class SessionMonitor: ObservableObject {
                 projectPath: cwdByPID[candidate.pid],
                 title: sidecar?.name,
                 startedAt: startedAtByPID[id] ?? processStartDate(elapsed: candidate.elapsed, now: now),
-                updatedAt: sidecar?.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) } ?? now,
+                updatedAt: sidecar?.authoritativeStatusDate
+                    ?? sidecar?.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) } ?? now,
                 // Claude keeps its process alive when it hands control back to
                 // an interactive shell. That is an open session, not active
                 // agent work, just like its explicit `idle` sidecar state.
-                state: ["idle", "shell"].contains(sidecar?.status) ? .idle : .running
+                state: sidecar?.state ?? .running,
+                claudeStatusUpdatedAt: sidecar?.authoritativeStatusDate
             )
         }
         return processSessions + discoverCodexSessions(now: now)

@@ -47,6 +47,7 @@ struct AgentSession: Identifiable, Equatable {
     let startedAt: Date
     var updatedAt: Date
     var state: MonitorState
+    var claudeStatusUpdatedAt: Date? = nil
 
     var isRemote: Bool { remoteHost != nil }
 

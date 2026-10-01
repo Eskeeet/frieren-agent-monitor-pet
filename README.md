@@ -125,7 +125,8 @@ global extension to report lifecycle events; the other harnesses use their
 native hook configuration. Restart active agent sessions after installing hooks.
 Claude hooks also clear an input alert when a prompt is submitted or the matching
 permission-gated tool resolves; background subagent tool activity does not clear
-an unrelated alert.
+an unrelated alert. A newer Claude session status transition also clears stale
+input alerts when approval changes the tool input and its hook request key.
 
 ## Remote agent monitoring over SSH
 

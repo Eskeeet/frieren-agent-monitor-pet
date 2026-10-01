@@ -11,8 +11,10 @@ spec.loader.exec_module(collector)
 
 
 class ClaudeStatusTests(unittest.TestCase):
-    def session(self, status="idle", updated=200):
+    def session(self, status="idle", updated=200, status_updated=None):
         sidecar = {"status": status, "updatedAt": updated * 1000} if status else None
+        if sidecar is not None and status_updated is not None:
+            sidecar["statusUpdatedAt"] = status_updated * 1000
         with patch.object(collector, "NOW", 1000), \
              patch.object(collector.subprocess, "check_output", return_value="42 00:15:00 claude\n"), \
              patch.object(collector, "cwd_for", return_value="/project"), \
@@ -68,6 +70,35 @@ class ClaudeStatusTests(unittest.TestCase):
 
     def test_active_sidecar_does_not_hide_pending_permission(self):
         result = self.merge(self.session("running"), [self.hook("permission", 150, requestKey="tool")])
+        self.assertEqual(result["state"], "waiting")
+
+    def test_busy_transition_clears_permission_with_changed_tool_input(self):
+        hooks = [self.hook("permission", 160, requestKey="original-tool"),
+                 self.hook("resume", 190, requestKey="edited-tool")]
+        result = self.merge(self.session("busy", status_updated=180), hooks)
+        self.assertEqual((result["state"], result["updatedAt"]), ("running", 180))
+
+    def test_busy_transition_does_not_hide_newer_permission(self):
+        hooks = [self.hook("permission", 160, requestKey="old-tool"),
+                 self.hook("permission", 190, requestKey="new-tool"),
+                 self.hook("resume", 195, requestKey="unrelated-subagent")]
+        result = self.merge(self.session("busy", status_updated=180), hooks)
+        self.assertEqual(result["state"], "waiting")
+
+    def test_rename_does_not_clear_permission(self):
+        for status_updated in (None, 140):
+            with self.subTest(status_updated=status_updated):
+                result = self.merge(self.session("busy", updated=200, status_updated=status_updated),
+                                    [self.hook("permission", 160, requestKey="tool")])
+                self.assertEqual(result["state"], "waiting")
+
+    def test_busy_transition_does_not_hide_newer_stop(self):
+        result = self.merge(self.session("busy", status_updated=180), [self.hook("stop", 210)])
+        self.assertEqual((result["state"], result["updatedAt"]), ("finished", 210))
+
+    def test_status_transition_time_takes_precedence_over_rename_for_idle(self):
+        result = self.merge(self.session("idle", updated=250, status_updated=180),
+                            [self.hook("permission", 210, requestKey="tool")])
         self.assertEqual(result["state"], "waiting")
 
     def test_other_harness_hooks_remain_authoritative(self):
