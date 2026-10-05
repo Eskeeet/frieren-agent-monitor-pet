@@ -40,11 +40,13 @@ def elapsed_seconds(value):
     return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
-def harness_for(args):
+def harness_for(args, executable_path=None):
     tokens = args.strip().split()
     if not tokens:
         return None
-    executable = os.path.basename(tokens[0])
+    # ps args does not quote executable paths containing spaces (for example
+    # Claude Desktop's Application Support install). Use comm when available.
+    executable = os.path.basename(executable_path or tokens[0])
     if executable == "claude":
         infrastructure = {"daemon", "bg-pty-host", "bg-spare", "--bg-pty-host", "--bg-spare"}
         return None if any(token in infrastructure for token in tokens[1:]) else "claude"
@@ -64,7 +66,8 @@ def harness_for(args):
             return "cursor"
         if re.search(r"\bpi-coding-agent\b", args):
             return "pi"
-    return None
+    # Linux comm can contain a runtime thread name or a versioned binary name.
+    return harness_for(args) if executable_path else None
 
 
 def cwd_for(pid):
@@ -92,6 +95,18 @@ def process_sessions():
     except (OSError, subprocess.SubprocessError):
         return []
 
+    executable_paths = {}
+    try:
+        commands = subprocess.check_output(
+            ["ps", "-axo", "pid=,comm="], text=True, stderr=subprocess.DEVNULL, timeout=2
+        )
+        for line in commands.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].isdigit():
+                executable_paths[int(parts[0])] = parts[1]
+    except (OSError, subprocess.SubprocessError):
+        pass
+
     sessions = []
     for line in output.splitlines():
         parts = line.strip().split(None, 2)
@@ -101,7 +116,7 @@ def process_sessions():
             pid = int(parts[0])
         except ValueError:
             continue
-        harness = harness_for(parts[2])
+        harness = harness_for(parts[2], executable_paths.get(pid))
         if not harness or harness == "codex":
             continue
         sidecar = read_json(HOME / ".claude" / "sessions" / f"{pid}.json") if harness == "claude" else None

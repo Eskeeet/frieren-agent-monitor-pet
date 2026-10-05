@@ -1,5 +1,6 @@
 import importlib.util
 import pathlib
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -10,13 +11,71 @@ collector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collector)
 
 
+class ClaudeDiscoveryTests(unittest.TestCase):
+    claude_path = "/Users/test/Library/Application Support/Claude/claude-code/2.1.288/claude.app/Contents/MacOS/claude"
+    wrapper_path = "/Applications/Claude.app/Contents/Helpers/disclaimer"
+
+    def test_cold_start_discovers_existing_desktop_sessions_without_hooks(self):
+        def process_output(command, **kwargs):
+            if command[-1] == "pid=,comm=":
+                return f"41 {self.wrapper_path}\n42 {self.claude_path}\n43 {self.claude_path}\n"
+            return (f"41 00:15:00 {self.wrapper_path} --pgroup -- {self.claude_path}\n"
+                    f"42 00:15:00 {self.claude_path} --output-format stream-json\n"
+                    f"43 00:15:00 {self.claude_path} --output-format stream-json\n")
+
+        def sidecar(path):
+            return {"name": path.stem, "status": "idle" if path.stem == "42" else "busy",
+                    "updatedAt": 900000, "statusUpdatedAt": 900000}
+
+        with patch.object(collector, "NOW", 1000), \
+             patch.object(collector.subprocess, "check_output", side_effect=process_output), \
+             patch.object(collector, "cwd_for", return_value="/project"), \
+             patch.object(collector, "read_json", side_effect=sidecar), \
+             patch.object(collector, "recent_hooks", return_value=[]):
+            sessions = collector.merge_hooks(collector.process_sessions())
+        self.assertEqual([session["pid"] for session in sessions], [42, 43])
+        self.assertEqual([session["state"] for session in sessions], ["idle", "running"])
+        self.assertTrue(all(session["startedAt"] == 100 for session in sessions))
+        self.assertEqual([session["title"] for session in sessions], ["42", "43"])
+
+    def test_desktop_infrastructure_and_wrappers_are_excluded(self):
+        for mode in ("daemon", "bg-pty-host", "bg-spare", "--bg-pty-host", "--bg-spare"):
+            with self.subTest(mode=mode):
+                self.assertIsNone(collector.harness_for(f"{self.claude_path} {mode}", self.claude_path))
+        self.assertIsNone(collector.harness_for(
+            f"{self.wrapper_path} --pgroup -- {self.claude_path}", self.wrapper_path))
+        self.assertIsNone(collector.harness_for("/Applications/Claude.app/Contents/MacOS/Claude"))
+
+    def test_cli_fallback_when_executable_listing_fails(self):
+        def process_output(command, **kwargs):
+            if command[-1] == "pid=,comm=":
+                raise subprocess.CalledProcessError(1, command)
+            return "42 00:15:00 /opt/homebrew/bin/claude --resume\n"
+
+        with patch.object(collector.subprocess, "check_output", side_effect=process_output), \
+             patch.object(collector, "cwd_for", return_value="/project"), \
+             patch.object(collector, "read_json", return_value=None):
+            sessions = collector.process_sessions()
+        self.assertEqual([session["pid"] for session in sessions], [42])
+
+    def test_rewritten_title_and_other_harnesses(self):
+        self.assertEqual(collector.harness_for("claude --resume", self.claude_path), "claude")
+        self.assertEqual(collector.harness_for("claude --resume", "/opt/versions/2.1.288"), "claude")
+        self.assertEqual(collector.harness_for(
+            "/opt/Agent Tools/node /opt/pi-coding-agent/dist/cli.js", "/opt/Agent Tools/node"), "pi")
+        self.assertEqual(collector.harness_for("node /opt/pi-coding-agent/dist/cli.js", "MainThread"), "pi")
+        self.assertEqual(collector.harness_for("Cursor Helper (Plugin): extension-host Agents Window"), "cursor")
+
+
 class ClaudeStatusTests(unittest.TestCase):
     def session(self, status="idle", updated=200, status_updated=None):
         sidecar = {"status": status, "updatedAt": updated * 1000} if status else None
         if sidecar is not None and status_updated is not None:
             sidecar["statusUpdatedAt"] = status_updated * 1000
+        def process_output(command, **kwargs):
+            return "42 claude\n" if command[-1] == "pid=,comm=" else "42 00:15:00 claude\n"
         with patch.object(collector, "NOW", 1000), \
-             patch.object(collector.subprocess, "check_output", return_value="42 00:15:00 claude\n"), \
+             patch.object(collector.subprocess, "check_output", side_effect=process_output), \
              patch.object(collector, "cwd_for", return_value="/project"), \
              patch.object(collector, "read_json", return_value=sidecar):
             return collector.process_sessions()[0]

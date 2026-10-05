@@ -337,11 +337,13 @@ final class SessionMonitor: ObservableObject {
 
     nonisolated private static func discover(startedAtByPID: [String: Date]) -> [AgentSession] {
         let output = ProcessRunner.read("/bin/ps", ["-axo", "pid=,etime=,tty=,args="])
+        let executablePaths = executablePaths(from: ProcessRunner.read("/bin/ps", ["-axo", "pid=,comm="]))
         var candidates: [(pid: Int, elapsed: String, harness: Harness)] = []
         for raw in output.split(separator: "\n") {
             let parts = raw.trimmingCharacters(in: .whitespaces)
                 .split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
-            guard parts.count == 4, let pid = Int(parts[0]), let harness = detectHarness(String(parts[3])) else { continue }
+            guard parts.count == 4, let pid = Int(parts[0]),
+                  let harness = detectHarness(String(parts[3]), executablePath: executablePaths[pid]) else { continue }
             // Codex Desktop keeps a global app server plus per-task sandbox and
             // app-server processes alive after a turn ends. Its rollout log has
             // the actual task lifecycle and avoids both duplicates and stale rows.
@@ -519,10 +521,24 @@ final class SessionMonitor: ObservableObject {
         return Int(truncatingIfNeeded: hash)
     }
 
-    nonisolated private static func detectHarness(_ args: String) -> Harness? {
+    nonisolated static func executablePaths(from output: String) -> [Int: String] {
+        var paths: [Int: String] = [:]
+        for line in output.split(separator: "\n") {
+            let parts = line.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
+            guard parts.count == 2, let pid = Int(parts[0]) else { continue }
+            paths[pid] = String(parts[1]).trimmingCharacters(in: .whitespaces)
+        }
+        return paths
+    }
+
+    nonisolated static func detectHarness(_ args: String, executablePath: String? = nil) -> Harness? {
         let args = args.trimmingCharacters(in: .whitespaces)
         let tokens = args.split(separator: " ").map(String.init)
-        guard let executable = tokens.first.map({ ($0 as NSString).lastPathComponent }) else { return nil }
+        // `args` does not quote argv[0]. Claude Desktop installs its executable
+        // under Application Support, so splitting at a space loses its name.
+        // `comm` supplies the executable separately from prompt/tool arguments.
+        guard let path = executablePath ?? tokens.first else { return nil }
+        let executable = (path as NSString).lastPathComponent
         if executable == "claude" {
             let infrastructure = ["daemon", "bg-pty-host", "bg-spare", "--bg-pty-host", "--bg-spare"]
             return tokens.dropFirst().contains(where: infrastructure.contains) ? nil : .claude
@@ -542,7 +558,9 @@ final class SessionMonitor: ObservableObject {
             if args.range(of: #"\bcursor-agent\b"#, options: .regularExpression) != nil { return .cursor }
             if args.range(of: #"\bpi-coding-agent\b"#, options: .regularExpression) != nil { return .pi }
         }
-        return nil
+        // Some installs use a versioned executable or a runtime thread name in
+        // comm. Preserve argv-based detection when that name is unrecognized.
+        return executablePath == nil ? nil : detectHarness(args)
     }
 
     nonisolated private static func processStartDate(elapsed: String, now: Date) -> Date {

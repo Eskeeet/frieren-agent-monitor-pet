@@ -107,7 +107,9 @@ hooks, and launch it in one step:
 ```
 
 Frieren discovers Claude Code, Cursor, and Pi from live process metadata, and
-Codex from top-level rollout logs. Internal Codex subagent turns are folded into
+Codex from top-level rollout logs. Claude Code sessions in Claude Desktop are
+discovered even when they were opened before Frieren, including executables
+installed under paths with spaces. Internal Codex subagent turns are folded into
 their parent task, while Cursor lifecycle hooks remain authoritative across
 restarts of its persistent Agents Window host. Cursor rows use a short version
 of the latest submitted prompt as their session summary.
